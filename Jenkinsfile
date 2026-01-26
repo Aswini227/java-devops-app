@@ -1,61 +1,68 @@
 pipeline {
     agent any
 
-    environment {  
+    environment {
         DOCKER_IMAGE = 'ashcreatingdocker/demo-app:latest'
-        KUBECONFIG = '/home/ubuntu/.kube/config'  // Jenkins will use this to access EKS
+        KUBECONFIG = '/home/ubuntu/.kube/config'  // path to kubeconfig for EKS access
     }
 
-    stages {  
-        stage('Clone Code') {  
-            steps {  
-                git branch: 'main', url: 'https://github.com/Aswini227/java-devops-app.git'  
-            }  
-        }  
+    stages {
+        stage('Clone Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Aswini227/java-devops-app.git'
+            }
+        }
 
-        stage('Build with Maven') {  
-            steps {  
-                // Build Maven directly on EC2 workspace so target/demo-0.0.1-SNAPSHOT.jar exists
-                sh 'mvn clean package -DskipTests'  
-            }  
-        }  
+        stage('Build with Maven (Docker)') {
+            steps {
+                sh """
+                docker run --rm \
+                  -v \$WORKSPACE:/app \
+                  -v /root/.m2:/root/.m2 \
+                  -w /app maven:3.9.6-eclipse-temurin-17 \
+                  mvn clean package
+                """
+            }
+        }
 
-        stage('Build Docker Image') {  
-            steps {  
-                sh "docker build -t $DOCKER_IMAGE ."  
-            }  
-        }  
+        stage('Build Docker Image') {
+            steps {
+                sh "docker build -t \$DOCKER_IMAGE ."
+            }
+        }
 
-        stage('Push Docker Image') {  
-            steps {  
+        stage('Push Docker Image') {
+            steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-id',  // <-- your Docker Hub credentials ID
                     usernameVariable: 'DOCKER_USER', 
                     passwordVariable: 'DOCKER_PASS'
-                )]) {  
+                )]) {
                     sh """
-                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-                        docker push $DOCKER_IMAGE
-                    """  
-                }  
-            }  
-        }  
+                      echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+                      docker push \$DOCKER_IMAGE
+                    """
+                }
+            }
+        }
 
-        stage('Deploy to EKS') {  
-            steps {  
-                // Make sure Jenkins has access to kubeconfig on EC2
-                sh 'kubectl apply -f k8s/'  
-                sh 'kubectl rollout status deployment/demo-app'  // wait for pod to be ready
-            }  
-        }  
-    }  
+        stage('Deploy to EKS') {
+            steps {
+                // Apply all YAMLs inside your k8s folder
+                sh 'kubectl apply -f k8s/'
 
-    post {  
-        success {  
-            echo '✅ Pipeline completed successfully! Your app is live on EKS!'  
-        }  
-        failure {  
-            echo '❌ Pipeline failed! Check logs for details.'  
-        }  
-    }  
+                // Wait until deployment is rolled out
+                sh 'kubectl rollout status deployment/demo-app'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '✅ Pipeline completed successfully! Your app is now live on EKS.'
+        }
+        failure {
+            echo '❌ Pipeline failed! Check the logs above.'
+        }
+    }
 }
